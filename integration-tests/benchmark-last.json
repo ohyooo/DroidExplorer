@@ -1,0 +1,14 @@
+{
+  "date": "2026-07-13T09:20:21.1874702+08:00",
+  "serial": "emulator-5554",
+  "adbVersion": "Android Debug Bridge version 1.0.41",
+  "connection": "Android emulator via local ADB",
+  "sizeBytes": 67108864,
+  "adbPushMiBs": 156.9,
+  "droidFilesPushMiBs": 163.22,
+  "pushRatio": 1.04,
+  "adbPullMiBs": 50.29,
+  "droidFilesPullMiBs": 38.12,
+  "pullRatio": 0.758,
+  "scope": "DroidFiles data-channel timings exclude server bootstrap and teardown; adb timings are process end-to-end"
+}

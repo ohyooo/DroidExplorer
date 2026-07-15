@@ -1,0 +1,13 @@
+syntax = "proto3";
+package dev.droidfiles.protocol.proto;
+option java_package = "dev.droidfiles.protocol.proto";
+option java_multiple_files = true;
+
+message PbClientHello { uint32 protocol_major=1;uint32 protocol_minor=2;string client_build_id=3;string session_token=4;repeated string capabilities=5;uint32 max_control_frame_size=6;uint32 preferred_transfer_chunk_size=7; }
+message PbServerHello { uint32 protocol_major=1;uint32 protocol_minor=2;string server_build_id=3;uint32 sdk=4;string model=5;int32 uid=6;int32 gid=7;string selinux_context=8;repeated string capabilities=9;uint32 max_control_frame_size=10;uint32 transfer_chunk_size=11; }
+enum PbErrorCode { PB_ERROR_UNSPECIFIED=0;PB_NOT_FOUND=1;PB_ALREADY_EXISTS=2;PB_PERMISSION_DENIED=3;PB_NOT_DIRECTORY=4;PB_IS_DIRECTORY=5;PB_DIRECTORY_NOT_EMPTY=6;PB_READ_ONLY_FILE_SYSTEM=7;PB_NO_SPACE=8;PB_INVALID_PATH=9;PB_UNSUPPORTED=10;PB_STALE_SOURCE=11;PB_CANCELLED=12;PB_TIMEOUT=13;PB_DEVICE_DISCONNECTED=14;PB_IO_ERROR=15;PB_PROTOCOL_ERROR=16;PB_INTERNAL_ERROR=17; }
+message PbWireError { PbErrorCode code=1;string message=2;optional string path=3;optional int32 errno=4;bool retryable=5;optional string operation_id=6; }
+enum PbTransferDirection { PB_DIRECTION_UNSPECIFIED=0;PB_UPLOAD=1;PB_DOWNLOAD=2; }
+enum PbTransferMode { PB_MODE_UNSPECIFIED=0;PB_RAW_FILE=1;PB_TREE_STREAM=2; }
+message PbDataHello { string session_token=1;string transfer_id=2;PbTransferDirection direction=3;string path=4;uint64 offset=5;uint64 length=6;PbTransferMode mode=7; }
+message PbTreeEntryHeader { string relative_path=1;bool directory=2;uint64 size=3;int64 modified_millis=4; }

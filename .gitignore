@@ -1,0 +1,12 @@
+.gradle/
+.idea/
+**/build/
+local.properties
+*.iml
+*.log
+.kotlin/
+out/
+.run/
+.codex/
+CODEX_TASK.md
+AGENTS.md

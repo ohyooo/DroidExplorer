@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:label="DroidFiles Server"
+        android:supportsRtl="true" />
+</manifest>
+
