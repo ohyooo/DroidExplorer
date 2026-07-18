@@ -2,6 +2,8 @@
 
 DroidFiles 是一个面向 Windows 11 的 Android 文件管理器。桌面端使用 Compose Desktop，Android 端通过 ADB 临时启动 `app_process` Server；握手完成后的浏览、文件操作和传输均走自定义协议。
 
+桌面业务 UI 只使用 Compose UI：键盘快捷键使用 `onPreviewKeyEvent`，本地文件拖入使用 `dragAndDropTarget`，源码不直接依赖 AWT/Swing。Windows 文件图标、文件剪贴板、默认打开和虚拟文件拖出属于操作系统能力，集中在 `platform-windows`/JNI 边界。
+
 ## 环境要求
 
 - JDK 21 或更高版本
@@ -29,7 +31,9 @@ DroidFiles 是一个面向 Windows 11 的 Android 文件管理器。桌面端使
 
 在 IntelliJ IDEA 中可直接选择共享运行配置 `DroidFiles Desktop`。它执行 `:desktop-app:run`；连接设备仍由应用内设备列表完成。
 
-连接后可使用多标签浏览，标签路径和活动标签会写入 `%LOCALAPPDATA%/DroidFiles/settings.json` 并在下次握手后恢复。支持 `Ctrl+T/W/Shift+T/A/C/X/V`、`Alt+←/→/↑`、`F2`、`F5`、`Enter` 和 `Delete`。设备连接中断时当前标签设置会保留，错误栏提供“Reconnect”入口。
+连接后可使用多标签浏览。标签路径和活动标签按设备 serial 分别写入 `%LOCALAPPDATA%/DroidFiles/settings.json`，切换或接入新设备不会继承其它设备的最后目录。支持 `Ctrl+T/W/Shift+T/A/C/X/V`、`Alt+←/→/↑`、`F2`、`F5`、`Enter` 和 `Delete`。设备连接中断时当前标签设置会保留，错误栏提供“Reconnect”入口。
+
+设备列表每 2 秒顺序刷新一次，设备插拔后自动更新且临时扫描失败不会清空已有列表。地址栏支持 Compose TextField 的选择、剪切、粘贴及 Enter 导航；文件名固定单行并在末尾省略。表头可点击切换升降序，列分隔线可拖动调整宽度；非根目录列表首行固定提供 `..` 返回上一级。
 
 工具栏 Search（或 `Ctrl+F`）执行可取消递归搜索，最多返回 500 项、最多扫描 10,000 个目录且不跟随符号链接。活动标签每 5 秒做一次低优先级目录校验，变化后保留仍存在的选择项并刷新。
 

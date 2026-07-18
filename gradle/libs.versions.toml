@@ -5,7 +5,7 @@ serialization = "1.11.0"
 android = "9.2.1"
 compose = "1.11.1"
 junit = "6.0.3"
-protobuf = "4.35.0"
+protobuf = "4.35.1"
 protobuf-plugin = "0.9.5"
 
 [libraries]

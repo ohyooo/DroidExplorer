@@ -6,7 +6,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.util.UUID
 
-data class TabState(val id: String = UUID.randomUUID().toString(), val path: RemotePath = RemotePath.of("/sdcard"), val back: List<RemotePath> = emptyList(), val forward: List<RemotePath> = emptyList(), val entries: List<RemoteEntry> = emptyList(), val selected: Set<RemotePath> = emptySet(), val selectionAnchor: RemotePath? = null, val loading: Boolean = false, val error: String? = null)
+enum class SortColumn { NAME, MODIFIED, TYPE, SIZE }
+enum class SortDirection { ASCENDING, DESCENDING }
+data class TabState(val id: String = UUID.randomUUID().toString(), val path: RemotePath = RemotePath.of("/sdcard"), val back: List<RemotePath> = emptyList(), val forward: List<RemotePath> = emptyList(), val entries: List<RemoteEntry> = emptyList(), val selected: Set<RemotePath> = emptySet(), val selectionAnchor: RemotePath? = null, val loading: Boolean = false, val error: String? = null, val sortColumn: SortColumn = SortColumn.NAME, val sortDirection: SortDirection = SortDirection.ASCENDING)
 data class ExplorerState(val tabs: List<TabState> = listOf(TabState()), val activeTabId: String = tabs.first().id, val closedTabs: List<TabState> = emptyList())
 enum class ExplorerShortcut { NEW_TAB, CLOSE_TAB, RESTORE_TAB, BACK, FORWARD, UP, REFRESH, SELECT_ALL }
 class ExplorerViewModel(private val fs: RemoteFileSystem, private val scope: CoroutineScope) {
@@ -26,7 +28,10 @@ class ExplorerViewModel(private val fs: RemoteFileSystem, private val scope: Cor
                 delay(intervalMillis);
                 val tab = active(); if (navigation[tab.id]?.isActive == true) continue; runCatching {
                     val latest = mutableListOf<RemoteEntry>(); fs.listDirectory(tab.path).collect { latest += it.entries };
-                    val current = find(tab.id); if (current != null && current.path == tab.path && current.entries != latest) replace(current.copy(entries = latest, selected = current.selected.intersect(latest.mapTo(hashSetOf()) { it.path }), error = null))
+                    val current = find(tab.id); if (current != null && current.path == tab.path) {
+                        val sorted = sortEntries(latest, current.sortColumn, current.sortDirection)
+                        if (current.entries != sorted) replace(current.copy(entries = sorted, selected = current.selected.intersect(latest.mapTo(hashSetOf()) { it.path }), error = null))
+                    }
                 }.onFailure { e -> if (e !is CancellationException) find(tab.id)?.takeIf { it.path == tab.path }?.let { replace(it.copy(error = e.message)) } }
             }
         }
@@ -38,7 +43,7 @@ class ExplorerViewModel(private val fs: RemoteFileSystem, private val scope: Cor
 
     fun navigate(path: RemotePath, history: Boolean = true) {
         val tab = active(); navigation.remove(tab.id)?.cancel(); replace(tab.copy(path = path, back = if (history) tab.back + tab.path else tab.back, forward = if (history) emptyList() else tab.forward, entries = emptyList(), selected = emptySet(), loading = true, error = null)); navigation[tab.id] =
-            scope.launch { runCatching { fs.listDirectory(path).collect { batch -> val current = find(tab.id) ?: return@collect; if (current.path == path) replace(current.copy(entries = current.entries + batch.entries, loading = !batch.complete)) } }.onFailure { e -> if (e !is CancellationException) find(tab.id)?.let { replace(it.copy(loading = false, error = e.message)) } } }
+            scope.launch { runCatching { fs.listDirectory(path).collect { batch -> val current = find(tab.id) ?: return@collect; if (current.path == path) replace(current.copy(entries = sortEntries(current.entries + batch.entries, current.sortColumn, current.sortDirection), loading = !batch.complete)) } }.onFailure { e -> if (e !is CancellationException) find(tab.id)?.let { replace(it.copy(loading = false, error = e.message)) } } }
     }
 
     private fun load(tab: TabState, path: RemotePath, history: Boolean) {
@@ -83,6 +88,12 @@ class ExplorerViewModel(private val fs: RemoteFileSystem, private val scope: Cor
         val t = active(); replace(t.copy(selected = t.entries.mapTo(linkedSetOf()) { it.path }, selectionAnchor = t.entries.firstOrNull()?.path))
     }
 
+    fun toggleSort(column: SortColumn) {
+        val tab = active()
+        val direction = if (tab.sortColumn == column && tab.sortDirection == SortDirection.ASCENDING) SortDirection.DESCENDING else SortDirection.ASCENDING
+        replace(tab.copy(sortColumn = column, sortDirection = direction, entries = sortEntries(tab.entries, column, direction)))
+    }
+
     fun shortcut(value: ExplorerShortcut) {
         when (value) {
             ExplorerShortcut.NEW_TAB -> newTab(); ExplorerShortcut.CLOSE_TAB -> closeTab(); ExplorerShortcut.RESTORE_TAB -> restoreClosed(); ExplorerShortcut.BACK -> back(); ExplorerShortcut.FORWARD -> forward(); ExplorerShortcut.UP -> {
@@ -97,4 +108,17 @@ class ExplorerViewModel(private val fs: RemoteFileSystem, private val scope: Cor
     private fun replace(tab: TabState) {
         mutable.value = mutable.value.copy(tabs = mutable.value.tabs.map { if (it.id == tab.id) tab else it })
     }
+}
+
+internal fun sortEntries(entries: List<RemoteEntry>, column: SortColumn, direction: SortDirection): List<RemoteEntry> {
+    val selected = Comparator<RemoteEntry> { left, right ->
+        when (column) {
+            SortColumn.NAME -> NaturalOrder.compare(left.name, right.name)
+            SortColumn.MODIFIED -> compareValues(left.modified, right.modified)
+            SortColumn.TYPE -> compareValues(left.type.name, right.type.name)
+            SortColumn.SIZE -> left.size.compareTo(right.size)
+        }
+    }
+    val directed = if (direction == SortDirection.ASCENDING) selected else selected.reversed()
+    return entries.sortedWith(compareBy<RemoteEntry> { it.type != EntryType.DIRECTORY }.then(directed).thenBy(NaturalOrder) { it.name })
 }

@@ -46,6 +46,18 @@ class ExplorerViewModelTest {
         val calls = fs.calls; vm.close(); delay(140); assertEquals(calls, fs.calls)
     }
 
+    @Test
+    fun `column sort toggles direction and keeps directories before files`(): Unit = runBlocking {
+        val vm = ExplorerViewModel(SortFs(), this); vm.navigate(RemotePath.of("/sorted")); delay(20)
+        assertEquals(listOf("folder", "a2.txt", "a10.txt"), vm.state.value.tabs.first().entries.map { it.name })
+        vm.toggleSort(SortColumn.NAME)
+        assertEquals(SortDirection.DESCENDING, vm.state.value.tabs.first().sortDirection)
+        assertEquals(listOf("folder", "a10.txt", "a2.txt"), vm.state.value.tabs.first().entries.map { it.name })
+        vm.toggleSort(SortColumn.SIZE)
+        assertEquals(SortDirection.ASCENDING, vm.state.value.tabs.first().sortDirection)
+        assertEquals(listOf("folder", "a2.txt", "a10.txt"), vm.state.value.tabs.first().entries.map { it.name })
+    }
+
     private class ChangingFs : RemoteFileSystem {
         var names = listOf("one");
         var calls = 0;
@@ -67,6 +79,21 @@ class ExplorerViewModelTest {
         override suspend fun copy(sources: List<RemotePath>, targetDir: RemotePath, policy: ConflictPolicy) = OperationHandle("x");
         override suspend fun move(sources: List<RemotePath>, targetDir: RemotePath, policy: ConflictPolicy) = OperationHandle("x");
         override suspend fun delete(paths: List<RemotePath>, recursive: Boolean) = OperationHandle("x");
+        override suspend fun computeHash(path: RemotePath) = ""
+    }
+
+    private class SortFs : RemoteFileSystem {
+        override fun listDirectory(path: RemotePath) = flowOf(DirectoryBatch(listOf(
+            RemoteEntry("a10.txt", path.child("a10.txt"), EntryType.FILE, 10, Instant.ofEpochSecond(10)),
+            RemoteEntry("folder", path.child("folder"), EntryType.DIRECTORY, 0, Instant.EPOCH),
+            RemoteEntry("a2.txt", path.child("a2.txt"), EntryType.FILE, 2, Instant.ofEpochSecond(2))
+        ), true))
+        override suspend fun stat(path: RemotePath, followLinks: Boolean) = error("unused")
+        override suspend fun mkdir(path: RemotePath, parents: Boolean) = Unit
+        override suspend fun rename(source: RemotePath, target: RemotePath, policy: ConflictPolicy) = Unit
+        override suspend fun copy(sources: List<RemotePath>, targetDir: RemotePath, policy: ConflictPolicy) = OperationHandle("x")
+        override suspend fun move(sources: List<RemotePath>, targetDir: RemotePath, policy: ConflictPolicy) = OperationHandle("x")
+        override suspend fun delete(paths: List<RemotePath>, recursive: Boolean) = OperationHandle("x")
         override suspend fun computeHash(path: RemotePath) = ""
     }
 

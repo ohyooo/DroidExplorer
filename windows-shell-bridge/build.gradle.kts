@@ -1,12 +1,15 @@
 plugins { base }
 
 val nativeBuildDir = layout.buildDirectory.dir("native")
+private fun localToolOrPath(localPath: String, command: String): String =
+    if (file(localPath).isFile) localPath else command
+
 val cmakeExecutable = providers.gradleProperty("cmake.path")
     .orElse(providers.environmentVariable("CMAKE_EXE"))
-    .orElse("D:\\Documents\\Android\\cmake\\4.1.2\\bin\\cmake.exe")
+    .orElse(localToolOrPath("D:\\Documents\\Android\\cmake\\4.1.2\\bin\\cmake.exe", "cmake"))
 val ninjaExecutable = providers.gradleProperty("ninja.path")
     .orElse(providers.environmentVariable("NINJA_EXE"))
-    .orElse("D:\\Documents\\Android\\cmake\\4.1.2\\bin\\ninja.exe")
+    .orElse(localToolOrPath("D:\\Documents\\Android\\cmake\\4.1.2\\bin\\ninja.exe", "ninja"))
 val vswhereExecutable = providers.gradleProperty("vswhere.path")
     .orElse(providers.environmentVariable("VSWHERE_EXE"))
     .orElse("C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe")

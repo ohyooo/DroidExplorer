@@ -134,7 +134,13 @@ object ServerMain {
     private fun dispatch(frame: Frame): Frame {
         val path = frame.payload.decodeToString();
         val payload = when (frame.messageType) {
-            MessageType.LIST -> File(path).listFiles()?.joinToString("\n") { f -> "${f.name}\t${if (f.isDirectory) "d" else "f"}\t${f.length()}\t${f.lastModified()}" }?.encodeToByteArray() ?: error("NOT_FOUND"); MessageType.STAT -> {
+            MessageType.LIST -> {
+                val directory = File(path)
+                check(directory.exists()) { "NOT_FOUND" }
+                check(directory.isDirectory) { "NOT_DIRECTORY" }
+                val children = directory.listFiles() ?: error("PERMISSION_DENIED")
+                children.joinToString("\n") { f -> "${f.name}\t${if (f.isDirectory) "d" else "f"}\t${f.length()}\t${f.lastModified()}" }.encodeToByteArray()
+            }; MessageType.STAT -> {
                 val f = File(path); check(f.exists()) { "NOT_FOUND" }; "${f.name}\t${if (f.isDirectory) "d" else "f"}\t${f.length()}\t${f.lastModified()}".encodeToByteArray()
             }; MessageType.MKDIR -> {
                 check(File(path).mkdirs() || File(path).isDirectory); byteArrayOf()

@@ -8,9 +8,13 @@
 
 图标或预览失败不能影响目录浏览，也不能把目录列表恢复成加载状态。快速滚动或切换目录时，应取消已经离开可见范围的预览任务。
 
+目录表格的名称列使用 `maxLines = 1`、`softWrap = false` 和 `TextOverflow.Ellipsis`，长文件名只在末尾省略。表头与文件行共享同一份 Compose 列宽状态，三个 12 dp 命中区通过 Compose `Modifier.draggable` 调整相邻列并保持总宽度；点击 Name、Date modified、Type、Size 会切换该标签页的升降序。`..` 始终位于非根目录普通条目之前且不参与排序。
+
+地址栏维护独立的编辑草稿，只在 Go/Enter 时解析 `RemotePath`；根级快捷键不会截获 TextField 的 Ctrl+A/C/X/V 或 Enter。设备发现使用生命周期内 2 秒顺序轮询，导航会话按 ADB serial 隔离保存。
+
 ## Windows 文件图标
 
-桌面端使用 JDK 官方 `FileSystemView.getSystemIcon()` 获取系统图标。Windows 实现会通过 Shell 读取当前用户有效的文件关联，其中包含注册表 `DefaultIcon`、用户覆盖、间接 DLL 资源和系统默认图标。应用不自行维护一份容易过期的扩展名图标表。
+桌面端通过隔离的 Windows JNI 调用官方 `SHGetFileInfoW` 获取系统图标，并用 GDI+ 输出 Compose/Skia 可直接解码的 PNG。Shell 会读取当前用户有效的文件关联，其中包含注册表 `DefaultIcon`、用户覆盖、间接 DLL 资源和系统默认图标。应用不使用 Swing `FileSystemView`，也不自行维护容易过期的扩展名图标表。
 
 图标缓存键由“目录或文件扩展名 + 请求尺寸”组成，扩展名不区分大小写。查询在线程池执行；第一次返回之前显示轻量的文件/文件夹占位图标。
 

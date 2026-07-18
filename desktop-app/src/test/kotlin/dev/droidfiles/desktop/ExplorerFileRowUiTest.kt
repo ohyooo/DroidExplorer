@@ -4,10 +4,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
 import dev.droidfiles.client.EntryType
 import dev.droidfiles.client.RemoteEntry
 import dev.droidfiles.protocol.RemotePath
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import java.time.Instant
@@ -61,5 +64,17 @@ class ExplorerFileRowUiTest {
         compose.onNodeWithTag("file-row-/sdcard/Download").performMouseInput { doubleClick(button = MouseButton.Primary) }
         compose.mainClock.advanceTimeBy(1_000)
         compose.waitForIdle(); assertTrue("desktop mouse directory double click", opened)
+    }
+
+    @Test
+    fun `long file name stays on one line and ellipsizes at end`() {
+        val name = "a-very-long-file-name-that-must-not-wrap-onto-another-line.txt"
+        val entry = RemoteEntry(name, RemotePath.of("/$name"), EntryType.FILE, 12, Instant.EPOCH)
+        compose.setContent { MaterialTheme { ExplorerFileRow(entry, false, {}, {}, {}, {}, {}, columnWidths = ExplorerColumnWidths(160.dp, 100.dp, 80.dp, 70.dp)) } }
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithTag("file-name-/$name").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals(1, layouts.single().lineCount)
+        val layout = layouts.single()
+        assertTrue("the visible single line must truncate the long name", layout.getLineEnd(0, true) < name.length)
     }
 }

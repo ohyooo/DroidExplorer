@@ -1,13 +1,7 @@
 package dev.droidfiles.windows
 
-import java.awt.Desktop
-import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
 import java.nio.file.Path
-import java.nio.file.Files
 import java.util.Locale
-import javax.imageio.ImageIO
-import javax.swing.filechooser.FileSystemView
 
 interface PlatformShell {
     fun open(path: Path);
@@ -38,6 +32,39 @@ object NativeDragBridge {
 
     external fun beginVirtualFileDrag(paths: Array<String>, itemIds: Array<String>, sizes: LongArray, directories: BooleanArray, modifiedMillis: LongArray, port: Int, token: String): Int;
     external fun shellOpen(path: String): Int
+    external fun shellIconPng(fileName: String, directory: Boolean, size: Int): ByteArray?
+    external fun setClipboardFiles(paths: Array<String>): Int
+    external fun setClipboardText(text: String): Int
+}
+
+class WindowsClipboard internal constructor(
+    private val writer: (Array<String>) -> Int,
+    private val textWriter: (String) -> Int = { 0 },
+) {
+    constructor() : this(nativeFileWriter, nativeTextWriter)
+
+    fun copyFiles(paths: List<Path>) {
+        require(paths.isNotEmpty()) { "At least one file is required" }
+        val normalized = paths.map { it.toAbsolutePath().normalize().toString() }.toTypedArray()
+        val result = writer(normalized)
+        check(result == 0) { "Windows clipboard rejected the file list (error $result)" }
+    }
+
+    fun copyText(text: String) {
+        val result = textWriter(text)
+        check(result == 0) { "Windows clipboard rejected text (error $result)" }
+    }
+
+    private companion object {
+        val nativeFileWriter: (Array<String>) -> Int = { paths ->
+            check(NativeDragBridge.available) { "Windows Shell bridge is unavailable" }
+            NativeDragBridge.setClipboardFiles(paths)
+        }
+        val nativeTextWriter: (String) -> Int = { text ->
+            check(NativeDragBridge.available) { "Windows Shell bridge is unavailable" }
+            NativeDragBridge.setClipboardText(text)
+        }
+    }
 }
 
 interface FileIconProvider {
@@ -72,20 +99,6 @@ class WindowsFileIconProvider internal constructor(
 
 private fun loadWindowsShellIcon(fileName: String, directory: Boolean, size: Int): ByteArray? {
     if (!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) return null
-    val suffix = if (directory) "" else fileName.substringAfterLast('.', "").take(32).filter { it.isLetterOrDigit() }
-        .takeIf(String::isNotEmpty)?.let { ".$it" }.orEmpty()
-    val probe = if (directory) Files.createTempDirectory("droidfiles-folder-icon-") else Files.createTempFile("droidfiles-file-icon-", suffix)
-    return try {
-        val icon = FileSystemView.getFileSystemView().getSystemIcon(probe.toFile(), size, size)
-        val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
-        val graphics = image.createGraphics()
-        try {
-            icon.paintIcon(null, graphics, 0, 0)
-        } finally {
-            graphics.dispose()
-        }
-        ByteArrayOutputStream().use { output -> ImageIO.write(image, "png", output); output.toByteArray() }
-    } finally {
-        runCatching { Files.deleteIfExists(probe) }
-    }
+    if (!NativeDragBridge.available) return null
+    return NativeDragBridge.shellIconPng(fileName, directory, size)
 }

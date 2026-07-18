@@ -1,6 +1,8 @@
 # Implementation progress
 
-Last updated: 2026-07-13
+Last updated: 2026-07-18
+
+- [x] Directory errors distinguish `NOT_FOUND`, `NOT_DIRECTORY`, and `PERMISSION_DENIED`; Explorer state collectors are cancelled on reconnect, disconnect, and composition disposal.
 
 - [x] Repository and environment inspected.
 - [x] Version-locked Gradle multi-module skeleton initialized.
@@ -24,8 +26,10 @@ Last updated: 2026-07-13
 - [x] Double-click remote file uses fingerprinted managed cache, cancellable RAW_FILE download, atomic `.part` commit, session lease and default/custom program dispatch.
 - [x] Background recursive drag manifest with cancellation keys, Unicode/nested/empty directory tests, and row drag gesture invokes native virtual drag.
 - [x] Transfer center reports total bytes, smoothed speed and ETA and exposes pause/resume/cancel/retry controls.
-- [x] 递归搜索、活动目录低频刷新、可见范围图片预览、编辑冲突检查与原子同步、Compose 剪贴板及跨设备中继完成。
-- [x] 最终全量构建、65 项 JVM/Compose 测试、Android 模拟器 E2E 和 Windows Shell 原生测试全部通过。
+- [x] 递归搜索、活动目录低频刷新、可见范围图片预览、编辑冲突检查与原子同步、平台剪贴板及跨设备中继完成。
+- [x] 最终全量构建、69 项 JVM/Compose 测试、Android 模拟器 E2E 和 Windows Shell 原生测试全部通过。
+
+Verified 2026-07-18: 业务/UI Kotlin 源码中的直接 AWT/Swing 依赖清零；键盘和本地文件拖入由 Compose UI API 处理，系统图标、剪贴板、默认打开和虚拟文件拖出隔离在 Windows JNI 平台层。最终 `clean build packageRelease` 完成 151 项任务；最终发行包连接 emulator-5554 后稳定运行超过 40 秒。
 
 Verified 2026-07-11: `gradlew build` succeeded; emulator-5554 accepted the app_process server, dynamic forward, framed STAT `/sdcard`, returned a valid response, unlinked its JAR, and the forward was removed.
 

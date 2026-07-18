@@ -16,9 +16,18 @@ object AppIdentity {
 data class ProgramAssociation(val executable: String, val arguments: List<String> = listOf("{file}"), val workingDirectory: String? = null, val waitForExit: Boolean = false)
 
 @Serializable
-data class AppSettings(val adbPath: String? = null, val transferWorkers: Int = 3, val cacheMaxBytes: Long = 1024L * 1024 * 1024, val cacheMaxDays: Int = 30, val showHidden: Boolean = true, val associations: Map<String, ProgramAssociation> = emptyMap(), val lastTabs: List<String> = listOf("/sdcard"), val activeTabIndex: Int = 0) {init {
-    require(transferWorkers in 1..8); require(cacheMaxBytes >= 0); require(cacheMaxDays >= 0); require(lastTabs.size <= 32)
+data class DeviceNavigationSettings(val tabs: List<String> = listOf("/sdcard"), val activeTabIndex: Int = 0) { init {
+    require(tabs.isNotEmpty() && tabs.size <= 32)
+    require(activeTabIndex in tabs.indices)
+} }
+
+@Serializable
+data class AppSettings(val adbPath: String? = null, val transferWorkers: Int = 3, val cacheMaxBytes: Long = 1024L * 1024 * 1024, val cacheMaxDays: Int = 30, val showHidden: Boolean = true, val associations: Map<String, ProgramAssociation> = emptyMap(), val navigationByDevice: Map<String, DeviceNavigationSettings> = emptyMap()) {init {
+    require(transferWorkers in 1..8); require(cacheMaxBytes >= 0); require(cacheMaxDays >= 0); require(navigationByDevice.keys.none(String::isBlank))
 }
+
+    fun navigationFor(serial: String): DeviceNavigationSettings = navigationByDevice[serial] ?: DeviceNavigationSettings()
+    fun withNavigation(serial: String, tabs: List<String>, activeTabIndex: Int): AppSettings = copy(navigationByDevice = navigationByDevice + (serial to DeviceNavigationSettings(tabs, activeTabIndex)))
 }
 
 class SettingsStore(private val file: Path = defaultFile()) {

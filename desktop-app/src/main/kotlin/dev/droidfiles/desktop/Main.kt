@@ -22,10 +22,8 @@ import kotlinx.coroutines.flow.first
 import java.nio.file.Files
 import java.nio.file.Path
 import java.net.URI
-import java.awt.datatransfer.DataFlavor
-import java.awt.datatransfer.Transferable
-import java.awt.datatransfer.UnsupportedFlavorException
 import dev.droidfiles.windows.WindowsPlatformShell
+import dev.droidfiles.windows.WindowsClipboard
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
@@ -40,8 +38,25 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -56,14 +71,16 @@ import dev.droidfiles.windows.FileIconProvider
 import dev.droidfiles.windows.WindowsFileIconProvider
 
 private val ExplorerColors = lightColorScheme(primary = Color(0xFF0067C0), onPrimary = Color.White, background = Color(0xFFF3F3F3), surface = Color(0xFFFBFBFB), surfaceVariant = Color(0xFFF0F0F0), secondaryContainer = Color(0xFFDCEBFA), outline = Color(0xFFD0D0D0), error = Color(0xFFC42B1C))
-fun main() = application { Window(onCloseRequest = ::exitApplication, title = "DroidFiles") { MaterialTheme(colorScheme = ExplorerColors) { DroidFilesApp(window) } } }
+private val ExplorerColumnHandleWidth = 12.dp
+fun main() = application { Window(onCloseRequest = ::exitApplication, title = "DroidFiles") { MaterialTheme(colorScheme = ExplorerColors) { DroidFilesApp() } } }
 
 @OptIn(ExperimentalComposeUiApi::class)
 
 @Composable
-private fun DroidFilesApp(window: java.awt.Window) {
+private fun DroidFilesApp() {
     val scope = rememberCoroutineScope();
     val fileIconProvider = remember { WindowsFileIconProvider() };
+    val platformClipboard = remember { WindowsClipboard() };
     val adb = remember { AdbClient(AdbLocator().locate()) };
     val settingsStore = remember { SettingsStore() };
     val privilegeStore = remember { PrivilegeSettingsStore() };
@@ -72,6 +89,7 @@ private fun DroidFilesApp(window: java.awt.Window) {
     var devices by remember { mutableStateOf<List<AdbDevice>>(emptyList()) };
     var session by remember { mutableStateOf<ConnectedAdbSession?>(null) };
     var explorer by remember { mutableStateOf<ExplorerViewModel?>(null) };
+    var explorerStateJob by remember { mutableStateOf<Job?>(null) };
     var explorerState by remember { mutableStateOf<ExplorerState?>(null) };
     var connectedSerial by remember { mutableStateOf<String?>(null) };
     var showSettings by remember { mutableStateOf(false) };
@@ -104,11 +122,8 @@ private fun DroidFilesApp(window: java.awt.Window) {
     var searchJob by remember { mutableStateOf<Job?>(null) }
     var editSession by remember { mutableStateOf<ManagedEditSession?>(null) }
     var editSyncing by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboard.current
-    fun refreshDevices() {
-        scope.launch { runCatching { adb.devices() }.onSuccess { devices = it }.onFailure { error = it.message } }
-    }
-
+    var addressFocused by remember { mutableStateOf(false) }
+    val rootFocusRequester = remember { FocusRequester() }
     fun navigate(target: RemotePath) {
         explorer?.let { it.navigate(target); return };
         val active = session ?: return; path = target; entries = emptyList(); loading = true; scope.launch { runCatching { active.fileSystem.listDirectory(target).collect { batch -> entries = entries + batch.entries; loading = !batch.complete } }.onFailure { error = it.message; loading = false } }
@@ -123,13 +138,19 @@ private fun DroidFilesApp(window: java.awt.Window) {
                 val plan = PrivilegeSessionPlan(privilegeStore.load().forDevice(device.serial)); plan.prepare(adb, device.serial)
                 ConnectedAdbSession.connect(adb, device.serial, jar, scope, plan::wrap, plan::validate)
             }.onSuccess { established ->
+                explorerStateJob?.cancel(); explorerStateJob = null
                 explorer?.close(); opener?.close(); transfers?.close(); session?.close(); session = established; connectedSerial = device.serial
                 opener = RemoteFileOpenService(device.serial, established.fileSystem, established.rawTransfers, cache, WindowsPlatformShell()) { settings }
                 val previewDir = Path.of(System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home"), AppIdentity.NAME, "cache", "preview", device.serial.hashCode().toUInt().toString(16))
                 previewProvider = RemoteImagePreviewProvider(established.rawTransfers, previewDir)
                 transfers = DefaultTransferManager(established.rawTransfers, established.fileSystem, scope).also { manager -> scope.launch { manager.jobs.collect { transferJobs = it } } }
-                explorer = ExplorerViewModel(established.fileSystem, scope).also { vm ->
-                    scope.launch {
+                val vm = ExplorerViewModel(established.fileSystem, scope)
+                explorer = vm
+                val restoredNavigation = settings.navigationFor(device.serial)
+                val restored = restoredNavigation.tabs.mapNotNull { saved -> runCatching { RemotePath.of(saved) }.getOrNull() }
+                vm.restoreTabs(restored, restoredNavigation.activeTabIndex)
+                vm.also {
+                    explorerStateJob = scope.launch {
                         vm.state.collect { state ->
                             explorerState = state
                             state.tabs.firstOrNull { tab -> tab.id == state.activeTabId }?.let { tab ->
@@ -137,27 +158,27 @@ private fun DroidFilesApp(window: java.awt.Window) {
                             }
                             val tabPaths = state.tabs.map { it.path.value }
                             val activeIndex = state.tabs.indexOfFirst { it.id == state.activeTabId }.coerceAtLeast(0)
-                            if (tabPaths != settings.lastTabs || activeIndex != settings.activeTabIndex) {
-                                val updated = settings.copy(lastTabs = tabPaths, activeTabIndex = activeIndex)
+                            val savedNavigation = settings.navigationFor(device.serial)
+                            if (tabPaths != savedNavigation.tabs || activeIndex != savedNavigation.activeTabIndex) {
+                                val updated = settings.withNavigation(device.serial, tabPaths, activeIndex)
                                 settings = updated
                                 withContext(Dispatchers.IO) { settingsStore.save(updated) }
                             }
                         }
                     }
-                    val restored = settings.lastTabs.mapNotNull { saved -> runCatching { RemotePath.of(saved) }.getOrNull() }
-                    vm.restoreTabs(restored, settings.activeTabIndex)
                     vm.startWatching()
                 }
                 loading = false
-                scope.launch {
-                    established.connection.state.first { it == ConnectionState.DISCONNECTED }; if (session === established) {
-                    withContext(Dispatchers.IO) { established.close() }; searchJob?.cancel(); searchRunning = false; session = null; opener?.close(); opener = null; transfers?.close(); transfers = null; previewProvider = null; explorer?.close(); explorer = null; loading = false; error = "Connection lost. Reconnect to continue."
+                    scope.launch {
+                        established.connection.state.first { it == ConnectionState.DISCONNECTED }; if (session === established) {
+                        withContext(Dispatchers.IO) { established.close() }; searchJob?.cancel(); searchRunning = false; explorerStateJob?.cancel(); explorerStateJob = null; session = null; opener?.close(); opener = null; transfers?.close(); transfers = null; previewProvider = null; explorer?.close(); explorer = null; loading = false; error = "Connection lost. Reconnect to continue."
                 }
                 }
             }.onFailure { error = it.message; loading = false }
         }
     }
-    DisposableEffect(Unit) { refreshDevices(); onDispose { searchJob?.cancel(); explorer?.close(); opener?.close(); transfers?.close(); session?.close() } }
+    DisposableEffect(Unit) { onDispose { searchJob?.cancel(); explorerStateJob?.cancel(); explorer?.close(); opener?.close(); transfers?.close(); session?.close() } }
+    LaunchedEffect(adb) { pollDevices(fetch = { adb.devices() }, onUpdate = { devices = it }) }
     var autoConnectAttempted by remember { mutableStateOf(false) }
     LaunchedEffect(devices, session) { val serial = System.getenv("DROIDFILES_UI_TEST_CONNECT"); if (session == null && serial != null && !autoConnectAttempted) devices.firstOrNull { it.serial == serial }?.let { autoConnectAttempted = true; connect(it) } }
     LaunchedEffect(selected?.path, session) {
@@ -182,43 +203,31 @@ private fun DroidFilesApp(window: java.awt.Window) {
             }
         }
     }
-    DisposableEffect(window, explorer, explorerState, session, path, remoteClipboard, clipboardCut) {
-        val manager = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager()
-        val dispatcher = java.awt.KeyEventDispatcher { event ->
-            if (manager.activeWindow != window) return@KeyEventDispatcher false
-            controlPressed = event.isControlDown; shiftPressed = event.isShiftDown
-            if (event.id != java.awt.event.KeyEvent.KEY_PRESSED) return@KeyEventDispatcher false
-            val shortcut = when {
-                event.isControlDown && event.isShiftDown && event.keyCode == java.awt.event.KeyEvent.VK_T -> ExplorerShortcut.RESTORE_TAB
-                event.isControlDown && event.keyCode == java.awt.event.KeyEvent.VK_T -> ExplorerShortcut.NEW_TAB
-                event.isControlDown && event.keyCode == java.awt.event.KeyEvent.VK_W -> ExplorerShortcut.CLOSE_TAB
-                event.isControlDown && event.keyCode == java.awt.event.KeyEvent.VK_A -> ExplorerShortcut.SELECT_ALL
-                event.isAltDown && event.keyCode == java.awt.event.KeyEvent.VK_LEFT -> ExplorerShortcut.BACK
-                event.isAltDown && event.keyCode == java.awt.event.KeyEvent.VK_RIGHT -> ExplorerShortcut.FORWARD
-                event.isAltDown && event.keyCode == java.awt.event.KeyEvent.VK_UP -> ExplorerShortcut.UP
-                event.keyCode == java.awt.event.KeyEvent.VK_F5 -> ExplorerShortcut.REFRESH
-                else -> null
-            }
+    fun handleKeyEvent(event: KeyEvent): Boolean {
+            controlPressed = event.isCtrlPressed; shiftPressed = event.isShiftPressed
+            if (event.type != KeyEventType.KeyDown) return false
+            if (addressFocused && (event.key == Key.Enter || event.isCtrlPressed && event.key in setOf(Key.A, Key.C, Key.V, Key.X))) return false
+            val shortcut = explorerShortcutFor(event.key, event.isCtrlPressed, event.isShiftPressed, event.isAltPressed)
             if (shortcut != null) {
-                explorer?.shortcut(shortcut); return@KeyEventDispatcher true
+                explorer?.shortcut(shortcut); return true
             }
             val current = explorerState?.tabs?.firstOrNull { it.id == explorerState?.activeTabId }
             val currentSelection = current?.selected.orEmpty()
-            when {
-                event.isControlDown && event.keyCode == java.awt.event.KeyEvent.VK_F -> {
+            return when {
+                event.isCtrlPressed && event.key == Key.F -> {
                     showSearch = true; true
                 }
 
-                event.isControlDown && event.keyCode == java.awt.event.KeyEvent.VK_C -> {
+                event.isCtrlPressed && event.key == Key.C -> {
                     remoteClipboard = currentSelection.toList(); clipboardCut = false; true
                 }
 
-                event.isControlDown && event.keyCode == java.awt.event.KeyEvent.VK_X -> {
+                event.isCtrlPressed && event.key == Key.X -> {
                     remoteClipboard = currentSelection.toList(); clipboardCut = true; true
                 }
 
-                event.isControlDown && event.keyCode == java.awt.event.KeyEvent.VK_V && remoteClipboard.isNotEmpty() -> {
-                    val active = session ?: return@KeyEventDispatcher false; scope.launch {
+                event.isCtrlPressed && event.key == Key.V && remoteClipboard.isNotEmpty() -> {
+                    val active = session ?: return false; scope.launch {
                         runCatching { if (clipboardCut) active.fileSystem.move(remoteClipboard, path, ConflictPolicy.KEEP_BOTH) else active.fileSystem.copy(remoteClipboard, path, ConflictPolicy.KEEP_BOTH) }.onSuccess {
                             if (clipboardCut) {
                                 remoteClipboard = emptyList(); clipboardCut = false
@@ -227,24 +236,23 @@ private fun DroidFilesApp(window: java.awt.Window) {
                     }; true
                 }
 
-                event.keyCode == java.awt.event.KeyEvent.VK_F2 && currentSelection.size == 1 -> {
+                event.key == Key.F2 && currentSelection.size == 1 -> {
                     entries.firstOrNull { it.path == currentSelection.first() }?.let { renameTarget = it; renameValue = it.name }; true
                 }
 
-                event.keyCode == java.awt.event.KeyEvent.VK_ENTER && currentSelection.size == 1 -> {
+                event.key == Key.Enter && currentSelection.size == 1 -> {
                     entries.firstOrNull { it.path == currentSelection.first() }?.let { item -> if (item.type == EntryType.DIRECTORY) navigate(item.path) else scope.launch { runCatching { opener?.open(item.path) }.onFailure { error = it.message } } }; true
                 }
 
-                event.keyCode == java.awt.event.KeyEvent.VK_DELETE && currentSelection.isNotEmpty() -> {
-                    val active = session ?: return@KeyEventDispatcher false; scope.launch { runCatching { active.fileSystem.delete(currentSelection.toList(), true); navigate(path) }.onFailure { error = it.message } }; true
+                event.key == Key.Delete && currentSelection.isNotEmpty() -> {
+                    val active = session ?: return false; scope.launch { runCatching { active.fileSystem.delete(currentSelection.toList(), true); navigate(path) }.onFailure { error = it.message } }; true
                 }
 
                 else -> false
             }
-        }
-        manager.addKeyEventDispatcher(dispatcher); onDispose { manager.removeKeyEventDispatcher(dispatcher) }
     }
-    Box(Modifier.fillMaxSize().dragAndDropTarget(shouldStartDragAndDrop = { event -> runCatching { event.dragData() is DragData.FilesList }.getOrDefault(false) }, target = fileDropTarget)) {
+    LaunchedEffect(Unit) { rootFocusRequester.requestFocus() }
+    Box(Modifier.fillMaxSize().focusRequester(rootFocusRequester).focusable().onPreviewKeyEvent(::handleKeyEvent).dragAndDropTarget(shouldStartDragAndDrop = { event -> runCatching { event.dragData() is DragData.FilesList }.getOrDefault(false) }, target = fileDropTarget).testTag("explorer-root")) {
         Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             ExplorerTabStrip(explorerState, session?.hello?.model ?: "Devices", onSelect = { explorer?.activate(it) }, onNew = { explorer?.newTab(path) }, onClose = { explorer?.closeTab(it) }); ExplorerCommandBar(canOperate = session != null, hasSelection = selectedPaths.isNotEmpty(), onNewFolder = {
             val active = session ?: return@ExplorerCommandBar; scope.launch {
@@ -262,8 +270,8 @@ private fun DroidFilesApp(window: java.awt.Window) {
             connected = session != null,
             canBack = activeTab?.back?.isNotEmpty() == true,
             canForward = activeTab?.forward?.isNotEmpty() == true,
-            onPathChange = { runCatching { path = RemotePath.of(it) } },
-            onNavigate = { navigate(path) },
+            onNavigate = { value -> runCatching { RemotePath.of(value) }.onSuccess(::navigate).onFailure { error = it.message } },
+            onFocusChanged = { addressFocused = it },
             onBack = { explorer?.back() },
             onForward = { explorer?.forward() },
             onUp = { val parent = path.value.substringBeforeLast('/').ifEmpty { "/" }; navigate(RemotePath.of(parent)) })
@@ -284,12 +292,16 @@ private fun DroidFilesApp(window: java.awt.Window) {
                     }
                 }
             }); VerticalDivider(); Column(Modifier.weight(1f).background(Color.White)) {
-            Row(Modifier.fillMaxWidth().height(38.dp).background(Color(0xFFF7F7F7)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Name", Modifier.weight(1f)); Text("Date modified", Modifier.width(180.dp)); Text("Type", Modifier.width(120.dp)); Text(
-                "Size",
-                Modifier.width(100.dp)
-            )
-            }; HorizontalDivider(); if (loading || preparingDrag) LinearProgressIndicator(Modifier.fillMaxWidth()); LazyColumn(Modifier.weight(1f)) {
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val handleWidth = ExplorerColumnHandleWidth
+            val initialNameWidth = (maxWidth - 180.dp - 120.dp - 100.dp - handleWidth * 3 - 24.dp).coerceAtLeast(160.dp)
+            var columnWidths by remember { mutableStateOf(ExplorerColumnWidths(initialNameWidth, 180.dp, 120.dp, 100.dp)) }
+            Column(Modifier.fillMaxSize()) {
+            ExplorerTableHeader(columnWidths, activeTab?.sortColumn ?: SortColumn.NAME, activeTab?.sortDirection ?: SortDirection.ASCENDING, onSort = { explorer?.toggleSort(it) }, onResize = { boundary, delta -> columnWidths = columnWidths.resize(boundary, delta) })
+            HorizontalDivider(); if (loading || preparingDrag) LinearProgressIndicator(Modifier.fillMaxWidth()); LazyColumn(Modifier.weight(1f)) {
+            if (path.value != "/") item(key = "__parent__") {
+                ExplorerParentRow(columnWidths) { navigate(RemotePath.of(path.value.substringBeforeLast('/').ifEmpty { "/" })) }
+            }
             items(entries, key = { it.path.value }) { entry ->
                 ExplorerFileRow(
                     entry,
@@ -304,10 +316,14 @@ private fun DroidFilesApp(window: java.awt.Window) {
                         }
                     },
                     onEdit = { scope.launch { runCatching { opener?.beginEdit(entry.path) }.onSuccess { session -> if (session != null) editSession = session }.onFailure { error = it.message } } },
-                    onCopyFile = { scope.launch { runCatching { checkNotNull(opener).download(entry.path) }.onSuccess { local -> clipboard.setClipEntry(fileListClipEntry(listOf(local))) }.onFailure { error = it.message } } },
+                    onCopyFile = { scope.launch { runCatching { checkNotNull(opener).download(entry.path) }.onSuccess { local -> runCatching { platformClipboard.copyFiles(listOf(local)) }.onFailure { error = it.message } }.onFailure { error = it.message } } },
+                    onCopyPath = { runCatching { platformClipboard.copyText(entry.path.value) }.onFailure { error = it.message } },
                     iconProvider = fileIconProvider,
-                    previewProvider = previewProvider
+                    previewProvider = previewProvider,
+                    columnWidths = columnWidths
                 )
+            }
+            }
             }
         }; HorizontalDivider(); Row(Modifier.fillMaxWidth().height(32.dp).background(Color(0xFFF7F7F7)).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text(if (selectedPaths.isEmpty()) "${entries.size} items" else "${entries.size} items · ${selectedPaths.size} selected", Modifier.weight(1f)); Text(session?.hello?.let { "${it.model} · ${it.selinuxContext}" } ?: "Not connected") }
         }
@@ -341,14 +357,72 @@ private fun DroidFilesApp(window: java.awt.Window) {
     }
 }
 
+internal suspend fun <T> pollDevices(intervalMillis: Long = 2_000, fetch: suspend () -> List<T>, onUpdate: (List<T>) -> Unit) {
+    require(intervalMillis > 0)
+    while (currentCoroutineContext().isActive) {
+        runCatching { fetch() }.onSuccess(onUpdate)
+        delay(intervalMillis)
+    }
+}
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun ExplorerFileRow(entry: RemoteEntry, selected: Boolean, onSelect: () -> Unit, onOpen: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, onDrag: () -> Unit, onEdit: () -> Unit = onOpen, onCopyFile: () -> Unit = {}, iconProvider: FileIconProvider? = null, previewProvider: FilePreviewProvider? = null) {
+internal fun ExplorerTableHeader(widths: ExplorerColumnWidths, sortColumn: SortColumn, sortDirection: SortDirection, onSort: (SortColumn) -> Unit, onResize: (Int, Dp) -> Unit) {
+    val density = LocalDensity.current
+    fun label(column: SortColumn, value: String) = if (sortColumn == column) "$value ${if (sortDirection == SortDirection.ASCENDING) "↑" else "↓"}" else value
+    @Composable fun HeaderCell(column: SortColumn, value: String, width: Dp) {
+        Box(Modifier.width(width).fillMaxHeight().clickable { onSort(column) }.testTag("column-${column.name.lowercase()}"), contentAlignment = Alignment.CenterStart) {
+            Text(label(column, value), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+    @Composable fun ResizeHandle(boundary: Int) {
+        val dragState = rememberDraggableState { pixels -> onResize(boundary, with(density) { pixels.toDp() }) }
+        Box(Modifier.width(ExplorerColumnHandleWidth).fillMaxHeight().draggable(dragState, Orientation.Horizontal).testTag("column-resizer-$boundary"), contentAlignment = Alignment.Center) {
+            VerticalDivider(Modifier.fillMaxHeight().width(1.dp), color = Color(0xFFD8D8D8))
+        }
+    }
+    Row(Modifier.fillMaxWidth().height(38.dp).background(Color(0xFFF7F7F7)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        HeaderCell(SortColumn.NAME, "Name", widths.name); ResizeHandle(0)
+        HeaderCell(SortColumn.MODIFIED, "Date modified", widths.modified); ResizeHandle(1)
+        HeaderCell(SortColumn.TYPE, "Type", widths.type); ResizeHandle(2)
+        HeaderCell(SortColumn.SIZE, "Size", widths.size)
+    }
+}
+
+internal data class ExplorerColumnWidths(val name: Dp, val modified: Dp, val type: Dp, val size: Dp) {
+    fun resize(boundary: Int, delta: Dp): ExplorerColumnWidths {
+        val values = listOf(name, modified, type, size)
+        val minimums = listOf(160.dp, 100.dp, 80.dp, 70.dp)
+        require(boundary in 0..2)
+        val permitted = delta.value.coerceIn(
+            minimums[boundary].value - values[boundary].value,
+            values[boundary + 1].value - minimums[boundary + 1].value
+        ).dp
+        val resized = values.toMutableList()
+        resized[boundary] += permitted
+        resized[boundary + 1] -= permitted
+        return ExplorerColumnWidths(resized[0], resized[1], resized[2], resized[3])
+    }
+}
+
+@Composable
+internal fun ExplorerParentRow(columnWidths: ExplorerColumnWidths, onOpen: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(36.dp).clickable(onClick = onOpen).testTag("parent-row").padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.width(columnWidths.name), verticalAlignment = Alignment.CenterVertically) {
+            Text("↰", Modifier.width(20.dp)); Spacer(Modifier.width(8.dp)); Text("..", maxLines = 1)
+        }
+        Spacer(Modifier.width(ExplorerColumnHandleWidth)); Spacer(Modifier.width(columnWidths.modified))
+        Spacer(Modifier.width(ExplorerColumnHandleWidth)); Text("Directory", Modifier.width(columnWidths.type), maxLines = 1)
+        Spacer(Modifier.width(ExplorerColumnHandleWidth)); Spacer(Modifier.width(columnWidths.size))
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun ExplorerFileRow(entry: RemoteEntry, selected: Boolean, onSelect: () -> Unit, onOpen: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, onDrag: () -> Unit, onEdit: () -> Unit = onOpen, onCopyFile: () -> Unit = {}, onCopyPath: () -> Unit = {}, iconProvider: FileIconProvider? = null, previewProvider: FilePreviewProvider? = null, columnWidths: ExplorerColumnWidths? = null) {
     val dragState = rememberDraggableState {}
     val currentSelect by rememberUpdatedState(onSelect)
     val currentOpen by rememberUpdatedState(onOpen)
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
     val iconBytes by produceState<ByteArray?>(null, entry.name, entry.type, iconProvider) { value = iconProvider?.let { withContext(Dispatchers.IO) { it.loadPng(entry.name, entry.type == EntryType.DIRECTORY, 20) } } }
     val previewBytes by produceState<ByteArray?>(null, entry.path, entry.size, entry.modified, previewProvider) {
         if (previewProvider != null) {
@@ -363,15 +437,18 @@ internal fun ExplorerFileRow(entry: RemoteEntry, selected: Boolean, onSelect: ()
             if (entry.type == EntryType.FILE) add(ContextMenuItem("Copy file to clipboard", onCopyFile))
             add(ContextMenuItem("Rename", onRename))
             add(ContextMenuItem("Delete", onDelete))
-            add(ContextMenuItem("Copy remote path", { scope.launch { clipboard.setClipEntry(ClipEntry(java.awt.datatransfer.StringSelection(entry.path.value))) } }))
+            add(ContextMenuItem("Copy remote path", onCopyPath))
         }
     }) {
         Row(Modifier.testTag("file-row-${entry.path.value}").semantics { onClick("Select") { currentSelect(); true } }.fillMaxWidth().height(36.dp).background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.White).pointerInput(entry.path) { detectTapGestures(onTap = { currentSelect() }, onDoubleTap = { currentSelect(); currentOpen() }) }
             .draggable(state = dragState, orientation = Orientation.Horizontal, enabled = selected, onDragStarted = { onDrag() }).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) { iconBitmap?.let { Image(it, contentDescription = null, modifier = Modifier.size(20.dp)) } ?: Text(if (entry.type == EntryType.DIRECTORY) "📁" else "📄"); Spacer(Modifier.width(8.dp)); Text(entry.name) }
-            Text(entry.modified?.toString()?.replace('T', ' ')?.take(16) ?: "", Modifier.width(180.dp))
-            Text(entry.type.name.lowercase().replaceFirstChar { it.uppercase() }, Modifier.width(120.dp))
-            Text(if (entry.type == EntryType.FILE) formatSize(entry.size) else "", Modifier.width(100.dp))
+            Row(columnWidths?.let { Modifier.width(it.name) } ?: Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) { iconBitmap?.let { Image(it, contentDescription = null, modifier = Modifier.size(20.dp)) } ?: Text(if (entry.type == EntryType.DIRECTORY) "📁" else "📄"); Spacer(Modifier.width(8.dp)); Text(entry.name, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).testTag("file-name-${entry.path.value}")) }
+            if (columnWidths != null) Spacer(Modifier.width(ExplorerColumnHandleWidth))
+            Text(entry.modified?.toString()?.replace('T', ' ')?.take(16) ?: "", Modifier.width(columnWidths?.modified ?: 180.dp), maxLines = 1, overflow = TextOverflow.Clip)
+            if (columnWidths != null) Spacer(Modifier.width(ExplorerColumnHandleWidth))
+            Text(entry.type.name.lowercase().replaceFirstChar { it.uppercase() }, Modifier.width(columnWidths?.type ?: 120.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (columnWidths != null) Spacer(Modifier.width(ExplorerColumnHandleWidth))
+            Text(if (entry.type == EntryType.FILE) formatSize(entry.size) else "", Modifier.width(columnWidths?.size ?: 100.dp), maxLines = 1, overflow = TextOverflow.Clip)
         }
     }
 }
@@ -493,16 +570,19 @@ private fun CommandButton(icon: String, label: String, enabled: Boolean, onClick
 }
 
 @Composable
-private fun ExplorerNavigationBar(path: RemotePath, connected: Boolean, canBack: Boolean, canForward: Boolean, onPathChange: (String) -> Unit, onNavigate: () -> Unit, onBack: () -> Unit, onForward: () -> Unit, onUp: () -> Unit) {
+internal fun ExplorerNavigationBar(path: RemotePath, connected: Boolean, canBack: Boolean, canForward: Boolean, onNavigate: (String) -> Unit, onFocusChanged: (Boolean) -> Unit = {}, onBack: () -> Unit, onForward: () -> Unit, onUp: () -> Unit) {
+    var draft by remember(path.value) { mutableStateOf(path.value) }
     Surface(color = Color(0xFFFBFBFB)) {
         Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 10.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             CommandButton("←", "", canBack, onBack); CommandButton("→", "", canForward, onForward); CommandButton("↑", "", connected && path.value != "/", onUp); OutlinedTextField(
-            path.value,
-            onPathChange,
-            Modifier.weight(1f),
+            draft,
+            { draft = it },
+            Modifier.weight(1f).onFocusChanged { onFocusChanged(it.isFocused) }.testTag("address-bar"),
             singleLine = true,
-            shape = RoundedCornerShape(5.dp)
-        ); CommandButton("→", "Go", connected, onNavigate)
+            shape = RoundedCornerShape(5.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { if (connected) onNavigate(draft) })
+        ); CommandButton("→", "Go", connected) { onNavigate(draft) }
         }
     }
 }
@@ -533,6 +613,18 @@ private fun SidebarItem(icon: String, label: String, selected: Boolean, onClick:
 
 private fun formatSize(bytes: Long): String = when {
     bytes < 1024 -> "$bytes B"; bytes < 1024 * 1024 -> "${bytes / 1024} KB"; bytes < 1024L * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"; else -> "%.1f GB".format(bytes.toDouble() / (1024 * 1024 * 1024))
+}
+
+internal fun explorerShortcutFor(key: Key, control: Boolean, shift: Boolean, alt: Boolean): ExplorerShortcut? = when {
+    control && shift && key == Key.T -> ExplorerShortcut.RESTORE_TAB
+    control && key == Key.T -> ExplorerShortcut.NEW_TAB
+    control && key == Key.W -> ExplorerShortcut.CLOSE_TAB
+    control && key == Key.A -> ExplorerShortcut.SELECT_ALL
+    alt && key == Key.DirectionLeft -> ExplorerShortcut.BACK
+    alt && key == Key.DirectionRight -> ExplorerShortcut.FORWARD
+    alt && key == Key.DirectionUp -> ExplorerShortcut.UP
+    key == Key.F5 -> ExplorerShortcut.REFRESH
+    else -> null
 }
 
 internal fun fileUrisToPaths(values: List<String>): List<Path> = values.mapNotNull { value -> runCatching { URI(value) }.getOrNull()?.takeIf { it.scheme.equals("file", ignoreCase = true) }?.let { runCatching { Path.of(it) }.getOrNull() } }
@@ -568,15 +660,4 @@ internal fun ManagedEditSyncDialog(session: ManagedEditSession, syncing: Boolean
         text = { Column { Text("The file is open in its Windows editor."); Text(session.remotePath.value); Text("After saving in the editor, upload only if the remote version has not changed.", Modifier.padding(top = 8.dp)); if (syncing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp)) } },
         confirmButton = { Button(onClick = onSync, enabled = !syncing, modifier = Modifier.testTag("edit-sync")) { Text("Upload changes") } },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !syncing) { Text("Keep remote unchanged") } })
-}
-
-@OptIn(ExperimentalComposeUiApi::class)
-internal fun fileListClipEntry(paths: List<Path>): ClipEntry {
-    val files = paths.map { it.toFile() }; return ClipEntry(object : Transferable {
-        override fun getTransferDataFlavors() = arrayOf(DataFlavor.javaFileListFlavor);
-        override fun isDataFlavorSupported(flavor: DataFlavor) = flavor == DataFlavor.javaFileListFlavor;
-        override fun getTransferData(flavor: DataFlavor): Any {
-            if (!isDataFlavorSupported(flavor)) throw UnsupportedFlavorException(flavor); return files
-        }
-    })
 }

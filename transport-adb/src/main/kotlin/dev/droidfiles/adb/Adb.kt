@@ -42,29 +42,37 @@ class AdbClient(val executable: Path, private val timeoutMillis: Long = 30_000) 
     fun start(vararg args: String) = ProcessBuilder(listOf(executable.toString()) + args).start()
 }
 
-data class BootstrapSession(val id: String, val tokenHex: String, val socketName: String, val remoteJar: String, var localPort: Int? = null)
+data class BootstrapSession(val id: String, val tokenHex: String, val socketName: String, val remoteJar: String, val remotePidFile: String, var localPort: Int? = null)
 class AdbBootstrap(private val adb: AdbClient, private val serial: String) : AutoCloseable {
     private var session: BootstrapSession? = null;
     private var process: Process? = null;
+    private var stopCommand: String? = null;
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO);
     private val logs = java.util.Collections.synchronizedList(mutableListOf<String>());
     fun diagnosticLog() = synchronized(logs) { logs.takeLast(50).joinToString("\n") }
     suspend fun start(serverJar: Path, major: Int = 1, minor: Int = 0, wrapCommand: (String) -> String = { it }): BootstrapSession {
         val random = ByteArray(32).also(SecureRandom()::nextBytes);
         val id = java.util.UUID.randomUUID().toString().replace("-", "");
-        val s = BootstrapSession(id, random.joinToString("") { "%02x".format(it) }, "droidfiles_$id", "/data/local/tmp/droidfiles-server-$id.jar");
+        val s = BootstrapSession(id, random.joinToString("") { "%02x".format(it) }, "droidfiles_$id", "/data/local/tmp/droidfiles-server-$id.jar", "/data/local/tmp/droidfiles-server-$id.pid");
         val push = adb.execute("-s", serial, "push", serverJar.toString(), s.remoteJar); require(push.exitCode == 0) { "Server push failed: ${push.stderr}" };
         val forward = adb.execute("-s", serial, "forward", "tcp:0", "localabstract:${s.socketName}"); check(forward.exitCode == 0) { "Forward failed: ${forward.stderr}" }; s.localPort = forward.stdout.toInt();
-        val command = "CLASSPATH=${shellQuote(s.remoteJar)} app_process / dev.droidfiles.server.ServerMain protocolMajor=$major protocolMinor=$minor socket=${shellQuote(s.socketName)} token=${shellQuote(s.tokenHex)} cleanup=true"; process =
+        val command = launchCommand(s, major, minor)
+        stopCommand = wrapCommand(AdbBootstrap.stopCommand(s)); process =
             adb.start("-s", serial, "shell", "-T", wrapCommand(command)).also { p -> scope.launch { p.inputStream.bufferedReader().useLines { lines -> lines.forEach { logs.add("stdout: $it") } } }; scope.launch { p.errorStream.bufferedReader().useLines { lines -> lines.forEach { logs.add("stderr: $it") } } } }; session = s; return s
     }
 
     override fun close() {
-        val s = session ?: return; process?.destroy(); scope.cancel(); runBlocking { s.localPort?.let { adb.execute("-s", serial, "forward", "--remove", "tcp:$it") }; adb.execute("-s", serial, "shell", "rm", s.remoteJar) }; session = null
+        val s = session ?: return; process?.destroy(); scope.cancel(); runBlocking {
+            s.localPort?.let { runCatching { adb.execute("-s", serial, "forward", "--remove", "tcp:$it") } }
+            stopCommand?.let { command -> runCatching { adb.execute("-s", serial, "shell", "-T", command) } }
+            runCatching { adb.execute("-s", serial, "shell", "rm", "-f", s.remoteJar, s.remotePidFile) }
+        }; stopCommand = null; session = null
     }
 
     companion object {
         fun shellQuote(value: String) = "'" + value.replace("'", "'\\''") + "'"
+        internal fun launchCommand(session: BootstrapSession, major: Int, minor: Int) = "echo \$\$ > ${shellQuote(session.remotePidFile)}; exec env CLASSPATH=${shellQuote(session.remoteJar)} app_process / dev.droidfiles.server.ServerMain protocolMajor=$major protocolMinor=$minor socket=${shellQuote(session.socketName)} token=${shellQuote(session.tokenHex)} cleanup=true"
+        internal fun stopCommand(session: BootstrapSession) = "if [ -f ${shellQuote(session.remotePidFile)} ]; then kill \$(cat ${shellQuote(session.remotePidFile)}) 2>/dev/null || true; rm -f ${shellQuote(session.remotePidFile)}; fi"
     }
 }
 
