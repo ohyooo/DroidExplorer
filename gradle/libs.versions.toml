@@ -2,11 +2,11 @@
 kotlin = "2.4.10"
 coroutines = "1.11.0"
 serialization = "1.11.0"
-android = "9.2.1"
+android = "9.3.0"
 compose = "1.11.1"
-junit = "6.0.3"
+junit = "6.1.2"
 protobuf = "4.35.1"
-protobuf-plugin = "0.9.5"
+protobuf-plugin = "0.10.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }

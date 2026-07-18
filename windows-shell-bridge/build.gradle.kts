@@ -4,6 +4,8 @@ val nativeBuildDir = layout.buildDirectory.dir("native")
 private fun localToolOrPath(localPath: String, command: String): String =
     if (file(localPath).isFile) localPath else command
 
+private fun quoteForCmd(value: String): String = "\"${value.replace("\"", "\\\"")}\""
+
 val cmakeExecutable = providers.gradleProperty("cmake.path")
     .orElse(providers.environmentVariable("CMAKE_EXE"))
     .orElse(localToolOrPath("D:\\Documents\\Android\\cmake\\4.1.2\\bin\\cmake.exe", "cmake"))
@@ -29,8 +31,8 @@ fun visualStudioEnvironmentCommand(): String {
 val configureNative by tasks.registering(Exec::class) {
     inputs.files(fileTree("src/main/cpp")); outputs.file(nativeBuildDir.map { it.file("build.ninja") })
     val javaHome = System.getProperty("java.home").replace('\\', '/')
-    commandLine("cmd", "/d", "/c", "${visualStudioEnvironmentCommand()} && \"${cmakeExecutable.get()}\" -S src/main/cpp -B \"${nativeBuildDir.get()}\" -G Ninja -DCMAKE_MAKE_PROGRAM=\"${ninjaExecutable.get()}\" -DJAVA_HOME=\"$javaHome\"")
+    commandLine("cmd", "/d", "/s", "/c", "${visualStudioEnvironmentCommand()} && ${quoteForCmd(cmakeExecutable.get())} -S ${quoteForCmd(file("src/main/cpp").absolutePath)} -B ${quoteForCmd(nativeBuildDir.get().asFile.absolutePath)} -G Ninja -DCMAKE_MAKE_PROGRAM=${quoteForCmd(ninjaExecutable.get())} -DJAVA_HOME=${quoteForCmd(javaHome)}")
 }
-val buildNative by tasks.registering(Exec::class) { dependsOn(configureNative); commandLine("cmd", "/d", "/c", "${visualStudioEnvironmentCommand()} && \"${cmakeExecutable.get()}\" --build \"${nativeBuildDir.get()}\"") }
+val buildNative by tasks.registering(Exec::class) { dependsOn(configureNative); commandLine("cmd", "/d", "/s", "/c", "${visualStudioEnvironmentCommand()} && ${quoteForCmd(cmakeExecutable.get())} --build ${quoteForCmd(nativeBuildDir.get().asFile.absolutePath)}") }
 val testNative by tasks.registering(Exec::class) { dependsOn(buildNative); commandLine(nativeBuildDir.map { it.file("descriptor_tests.exe") }.get().asFile.absolutePath) }
 tasks.named("check") { dependsOn(testNative) }; tasks.named("assemble") { dependsOn(buildNative) }
