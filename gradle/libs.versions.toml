@@ -2,7 +2,7 @@
 kotlin = "2.4.10"
 coroutines = "1.11.0"
 serialization = "1.11.0"
-android = "9.3.0"
+android = "9.3.1"
 compose = "1.11.1"
 junit = "6.1.2"
 protobuf = "4.35.1"
