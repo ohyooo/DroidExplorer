@@ -70,7 +70,7 @@ import org.jetbrains.skia.Image as SkiaImage
 import dev.droidfiles.windows.FileIconProvider
 import dev.droidfiles.windows.WindowsFileIconProvider
 
-private val ExplorerColors = lightColorScheme(primary = Color(0xFF0067C0), onPrimary = Color.White, background = Color(0xFFF3F3F3), surface = Color(0xFFFBFBFB), surfaceVariant = Color(0xFFF0F0F0), secondaryContainer = Color(0xFFDCEBFA), outline = Color(0xFFD0D0D0), error = Color(0xFFC42B1C))
+private val ExplorerColors = lightColorScheme(primary = Color(0xFF005FB8), onPrimary = Color.White, background = Color(0xFFF5F7FA), surface = Color(0xFFFFFFFF), surfaceVariant = Color(0xFFF0F3F7), secondaryContainer = Color(0xFFDCEBFA), outline = Color(0xFFD5DAE1), error = Color(0xFFC42B1C))
 private val ExplorerColumnHandleWidth = 12.dp
 fun main() = application { Window(onCloseRequest = ::exitApplication, title = "DroidFiles") { MaterialTheme(colorScheme = ExplorerColors) { DroidFilesApp() } } }
 
@@ -325,7 +325,13 @@ private fun DroidFilesApp() {
             }
             }
             }
-        }; HorizontalDivider(); Row(Modifier.fillMaxWidth().height(32.dp).background(Color(0xFFF7F7F7)).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text(if (selectedPaths.isEmpty()) "${entries.size} items" else "${entries.size} items · ${selectedPaths.size} selected", Modifier.weight(1f)); Text(session?.hello?.let { "${it.model} · ${it.selinuxContext}" } ?: "Not connected") }
+        }; HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .65f)); Row(Modifier.fillMaxWidth().height(34.dp).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (selectedPaths.isEmpty()) "${entries.size} items" else "${entries.size} items · ${selectedPaths.size} selected", color = Color(0xFF4A5563), modifier = Modifier.weight(1f), maxLines = 1)
+            val connectionLabel = session?.hello?.let { "${it.model} · ${it.selinuxContext}" } ?: "Not connected"
+            Surface(color = if (session != null) Color(0xFFE2F3E8) else Color(0xFFFFE8E6), shape = RoundedCornerShape(10.dp)) {
+                Text(connectionLabel, color = if (session != null) Color(0xFF176B3A) else MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
         }
         }
             renameTarget?.let { item ->
@@ -589,7 +595,7 @@ internal fun ExplorerNavigationBar(path: RemotePath, connected: Boolean, canBack
 
 @Composable
 private fun ExplorerSidebar(devices: List<AdbDevice>, model: String?, jobs: List<TransferJobSnapshot>, onDevice: (AdbDevice) -> Unit, onLocation: (RemotePath) -> Unit, onTransferAction: (String, String) -> Unit) {
-    Surface(color = Color(0xFFF7F7F7), modifier = Modifier.width(230.dp).fillMaxHeight()) {
+    Surface(color = Color(0xFFF8FAFC), modifier = Modifier.width(238.dp).fillMaxHeight()) {
         Column(Modifier.padding(vertical = 8.dp)) {
             SidebarItem("⌂", "Home", false) { onLocation(RemotePath.of("/sdcard")) }; SidebarItem("↓", "Downloads", false) { onLocation(RemotePath.of("/sdcard/Download")) }; Text("Devices", color = Color(0xFF666666), modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)); devices.forEach { SidebarItem("▣", it.attributes["model"] ?: it.serial, model == it.attributes["model"]) { onDevice(it) } }; if (jobs.isNotEmpty()) {
             Text("Transfers", color = Color(0xFF666666), modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)); jobs.takeLast(3).forEach { job ->
@@ -608,7 +614,7 @@ private fun ExplorerSidebar(devices: List<AdbDevice>, model: String?, jobs: List
 
 @Composable
 private fun SidebarItem(icon: String, label: String, selected: Boolean, onClick: () -> Unit) {
-    Surface(onClick = onClick, color = if (selected) Color(0xFFE1EAF4) else Color.Transparent, shape = RoundedCornerShape(5.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 1.dp)) { Row(Modifier.height(36.dp).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text(icon, Modifier.width(26.dp)); Text(label) } }
+    Surface(onClick = onClick, color = if (selected) Color(0xFFDCEBFA) else Color.Transparent, shape = RoundedCornerShape(6.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)) { Row(Modifier.height(38.dp).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) { Text(icon, Modifier.width(28.dp), color = Color(0xFF4C6075)); Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
 }
 
 private fun formatSize(bytes: Long): String = when {
