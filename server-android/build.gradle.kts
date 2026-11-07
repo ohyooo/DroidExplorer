@@ -1,8 +1,19 @@
 plugins { alias(libs.plugins.android.application) }
 
 android {
-    namespace = "dev.droidfiles.server"; compileSdk = 37
-    defaultConfig { applicationId = "dev.droidfiles.server"; minSdk = 23; targetSdk = 37; versionCode = 1; versionName = project.version.toString() }
+    namespace = "dev.droidfiles.server"
+    compileSdk {
+        version = release(libs.versions.compile.sdk.get().toInt()) {
+            minorApiLevel = libs.versions.compile.minor.get().toInt()
+        }
+    }
+    defaultConfig {
+        applicationId = "dev.droidfiles.server"
+        minSdk = libs.versions.min.sdk.get().toInt()
+        targetSdk = libs.versions.target.sdk.get().toInt()
+        versionCode = 1
+        versionName = project.version.toString()
+    }
     buildTypes { release { isMinifyEnabled = false; signingConfig = null } }
 }
 dependencies { implementation(project(":protocol")); implementation(libs.coroutines.core) }
